@@ -35,6 +35,25 @@ public class Scoreboard {
         game.updateScore(homeScore, awayScore);
     }
 
+    public List<Game> getSummary() {
+        List<Game> summary = new ArrayList<>(games.values());
+
+        summary.sort((game1, game2) -> {
+            int totalCompare = Integer.compare(
+                    game2.getTotalScore(),
+                    game1.getTotalScore()
+            );
+
+            if (totalCompare != 0) {
+                return totalCompare;
+            }
+
+            return game2.getStartTime().compareTo(game1.getStartTime());
+        });
+
+        return summary;
+    }
+
     public Game getGame(Long id) {
         return games.get(id);
     }
