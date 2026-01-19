@@ -15,6 +15,10 @@
 
 ```mvn test```
 
+### Run demo:
+
+``` mvn exec:java -Dexec.mainClass="com.scoreboard.ScoreboardDemo"```
+
 ### License
 
 MIT License

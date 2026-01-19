@@ -23,9 +23,7 @@ public class ScoreboardDemo {
 
         printAllGames(scoreboard);
 
-        System.out.println("\nFinishing game: " + game5.getHomeTeam()+  " " + game5.getHomeScore() + " - " + game5.getAwayScore() + " " + game5.getAwayTeam() + "\n");
 
-        scoreboard.finishGame(game5.getId());
 
         System.out.println("\nUpdating scores...\n");
 
@@ -33,6 +31,11 @@ public class ScoreboardDemo {
         updateAndPrint(scoreboard, game2, 10, 2);
         updateAndPrint(scoreboard, game3, 2, 2);
         updateAndPrint(scoreboard, game4, 6, 6);
+        updateAndPrint(scoreboard, game5, 1, 2);
+
+        System.out.println("\nFinishing game: " + game5.getHomeTeam()+  " " + game5.getHomeScore() + " - " + game5.getAwayScore() + " " + game5.getAwayTeam() + "\n");
+
+        scoreboard.finishGame(game5.getId());
 
         printSummary(scoreboard);
     }
@@ -52,12 +55,11 @@ public class ScoreboardDemo {
 
     private static void updateAndPrint(Scoreboard scoreboard, Game game, int homeScore, int awayScore) {
         scoreboard.updateScore(game.getId(), homeScore, awayScore);
-        Game updatedGame = scoreboard.getGame(game.getId());
         System.out.printf("Updated: %s %d - %d %s\n",
-            updatedGame.getHomeTeam(),
-            updatedGame.getHomeScore(),
-            updatedGame.getAwayScore(),
-            updatedGame.getAwayTeam());
+            game.getHomeTeam(),
+            game.getHomeScore(),
+            game.getAwayScore(),
+            game.getAwayTeam());
     }
 
     private static void printSummary(Scoreboard scoreboard) {
