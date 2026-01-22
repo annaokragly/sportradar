@@ -1,21 +1,14 @@
 package com.scoreboard.model;
 
 /**
- * Value object representing a game score.
- * Encapsulates score validation logic in one place.
+ * Immutable value object representing a game score.
  */
 public record Score(int home, int away) {
     private static final int MAX_REALISTIC_SCORE = 50;
 
     public Score {
-        if (home < 0 || away < 0) {
-            throw new IllegalArgumentException("Scores cannot be negative");
-        }
-        if (home > MAX_REALISTIC_SCORE || away > MAX_REALISTIC_SCORE) {
-            throw new IllegalArgumentException(
-                    "Score exceeds realistic maximum (" + MAX_REALISTIC_SCORE + ")"
-            );
-        }
+        validateScore(home, "Home");
+        validateScore(away, "Away");
     }
 
     public static Score initial() {
@@ -24,5 +17,24 @@ public record Score(int home, int away) {
 
     public int total() {
         return home + away;
+    }
+
+    @Override
+    public String toString() {
+        return home + "-" + away;
+    }
+
+    private static void validateScore(int score, String teamType) {
+        if (score < 0) {
+            throw new IllegalArgumentException(
+                    String.format("%s score cannot be negative (got: %d)", teamType, score)
+            );
+        }
+        if (score > MAX_REALISTIC_SCORE) {
+            throw new IllegalArgumentException(
+                    String.format("%s score exceeds realistic maximum of %d (got: %d)",
+                            teamType, MAX_REALISTIC_SCORE, score)
+            );
+        }
     }
 }
