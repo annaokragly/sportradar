@@ -1,28 +1,23 @@
 package com.scoreboard.model;
 
 import java.time.Instant;
+import java.util.Objects;
 
-public class Game {
+public final class Game {
+    private static final int MAX_TEAM_NAME_LENGTH = 50;
     private final Long id;
     private final String homeTeam;
     private final String awayTeam;
-    private Score score;
+    private volatile Score score;
     private final Instant startTime;
 
     public Game(Long id, String homeTeam, String awayTeam) {
-        if (homeTeam == null || homeTeam.isBlank()) {
-            throw new IllegalArgumentException("Home team name cannot be empty");
-        }
-        if (awayTeam == null || awayTeam.isBlank()) {
-            throw new IllegalArgumentException("Away team name cannot be empty");
-        }
-        this.homeTeam = validateTeamName(homeTeam, "Home");
-        this.awayTeam = validateTeamName(awayTeam, "Away");
+        this.id = Objects.requireNonNull(id, "Game ID cannot be null");
+        this.homeTeam = validateAndNormalizeTeamName(homeTeam, "Home");
+        this.awayTeam = validateAndNormalizeTeamName(awayTeam, "Away");
         if (this.homeTeam.equalsIgnoreCase(this.awayTeam)) {
             throw new IllegalArgumentException("Home and away teams cannot be the same");
         }
-
-        this.id = id;
         this.score = Score.initial();
         this.startTime = Instant.now();
     }
@@ -65,14 +60,32 @@ public class Game {
         return String.format("%s %d - %s %d", homeTeam, score.home(), awayTeam, score.away());
     }
 
-    private String validateTeamName(String teamName, String teamType) {
-        if (teamName == null || teamName.isBlank()) {
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Game game)) return false;
+        return Objects.equals(id, game.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+
+    private String validateAndNormalizeTeamName(String teamName, String teamType) {
+        Objects.requireNonNull(teamName, teamType + " team name cannot be null");
+
+        String trimmed = teamName.trim();
+        if (trimmed.isEmpty()) {
             throw new IllegalArgumentException(teamType + " team name cannot be empty");
         }
-        String trimmed = teamName.trim();
-        if (trimmed.length() > 50) {
-            throw new IllegalArgumentException(teamType + " team name too long (max 50 characters)");
+        if (trimmed.length() > MAX_TEAM_NAME_LENGTH) {
+            throw new IllegalArgumentException(String.format(
+                    "%s team name too long (max %d characters, got %d)",
+                    teamType, MAX_TEAM_NAME_LENGTH, trimmed.length())
+            );
         }
+
         return trimmed;
     }
 }
