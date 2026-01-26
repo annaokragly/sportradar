@@ -1,16 +1,21 @@
 package com.scoreboard;
 
 import com.scoreboard.model.Game;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
-import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("Scoreboard Tests")
+@DisplayName("Scoreboard")
 class ScoreboardTest {
 
     private Scoreboard scoreboard;
@@ -20,237 +25,331 @@ class ScoreboardTest {
         scoreboard = new Scoreboard();
     }
 
-    @Test
-    @DisplayName("Should start a new game with initial score 0-0")
-    void testStartGame() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
+    @Nested
+    @DisplayName("starting games")
+    class StartGameTests {
 
-        assertNotNull(game);
-        assertNotNull(game.getId());
-        assertEquals("Spain", game.getHomeTeam());
-        assertEquals("Brazil", game.getAwayTeam());
-        assertEquals(0, game.getHomeScore());
-        assertEquals(0, game.getAwayScore());
-        assertNotNull(game.getStartTime());
+        @Test
+        @DisplayName("should start a new game with initial score 0-0")
+        void startsGame() {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+
+            assertAll("Game initialization",
+                    () -> assertNotNull(game.getId(), "Game should have an ID"),
+                    () -> assertEquals("Spain", game.getHomeTeam(), "Home team name"),
+                    () -> assertEquals("Brazil", game.getAwayTeam(), "Away team name"),
+                    () -> assertEquals(0, game.getHomeScore(), "Initial home score"),
+                    () -> assertEquals(0, game.getAwayScore(), "Initial away score"),
+                    () -> assertNotNull(game.getStartTime(), "Start time recorded")
+            );
+        }
+
+        @Test
+        @DisplayName("should reject null team names")
+        void rejectsNullTeamNames() {
+            assertAll("Null team names",
+                    () -> assertThrows(NullPointerException.class,
+                            () -> scoreboard.startGame(null, "Brazil")),
+                    () -> assertThrows(NullPointerException.class,
+                            () -> scoreboard.startGame("Spain", null))
+            );
+        }
+
+        @ParameterizedTest(name = "team name = ''{0}''")
+        @ValueSource(strings = {"", "   ", "\t", "\n"})
+        @DisplayName("should reject blank team names")
+        void rejectsBlankTeamNames(String invalidName) {
+            assertAll("Blank team names",
+                    () -> assertThrows(IllegalArgumentException.class,
+                            () -> scoreboard.startGame(invalidName, "Brazil")),
+                    () -> assertThrows(IllegalArgumentException.class,
+                            () -> scoreboard.startGame("Spain", invalidName))
+            );
+        }
+
+        @Test
+        @DisplayName("should reject identical team names")
+        void rejectsIdenticalTeamNames() {
+            assertThrows(IllegalArgumentException.class,
+                    () -> scoreboard.startGame("Spain", "Spain"));
+        }
     }
 
-    @Test
-    @DisplayName("Should throw exception when starting game with empty home team")
-    void testStartGameEmptyHomeTeam() {
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame("", "Brazil"));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame("   ", "Brazil"));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame(null, "Brazil"));
+    @Nested
+    @DisplayName("updating scores")
+    class UpdateScoreTests {
+
+        @Test
+        @DisplayName("should update game score successfully")
+        void updatesScoreSuccessfully() {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+
+            scoreboard.updateScore(game.getId(), 2, 1);
+
+            assertAll("Score update",
+                    () -> assertEquals(2, game.getHomeScore()),
+                    () -> assertEquals(1, game.getAwayScore()),
+                    () -> assertEquals(3, game.getTotalScore())
+            );
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+                "-1, 0",
+                "0, -1",
+                "-1, -1"
+        })
+        @DisplayName("should reject negative scores")
+        void rejectsNegativeScores(int homeScore, int awayScore) {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> scoreboard.updateScore(game.getId(), homeScore, awayScore));
+        }
+
+        @Test
+        @DisplayName("should throw GameNotFoundException for non-existent game")
+        void throwsExceptionForNonExistentGame() {
+            GameNotFoundException exception = assertThrows(GameNotFoundException.class,
+                    () -> scoreboard.updateScore(999L, 1, 1));
+
+            assertTrue(exception.getMessage().contains("999"));
+        }
     }
 
-    @Test
-    @DisplayName("Should throw exception when starting game with empty away team")
-    void testStartGameEmptyAwayTeam() {
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame("Spain", ""));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame("Spain", "   "));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.startGame("Spain", null));
+    @Nested
+    @DisplayName("finishing games")
+    class FinishGameTests {
+
+        @Test
+        @DisplayName("should finish game and remove from scoreboard")
+        void finishesGameAndRemovesFromScoreboard() {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+            Long gameId = game.getId();
+
+            boolean result = scoreboard.finishGame(gameId);
+
+            assertAll("Game finish",
+                    () -> assertTrue(result, "Should return true on successful finish"),
+                    () -> assertEquals(0, scoreboard.getGameCount(), "Game should be removed"),
+                    () -> assertTrue(scoreboard.findGame(gameId).isEmpty(), "Game should not be findable")
+            );
+        }
+
+        @Test
+        @DisplayName("should return false for non-existent game")
+        void returnsFalseForNonExistentGame() {
+            assertFalse(scoreboard.finishGame(999L));
+        }
+
+        @Test
+        @DisplayName("should be idempotent - finishing same game multiple times")
+        void isIdempotent() {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+            Long gameId = game.getId();
+
+            boolean firstFinish = scoreboard.finishGame(gameId);
+            boolean secondFinish = scoreboard.finishGame(gameId);
+            boolean thirdFinish = scoreboard.finishGame(gameId);
+
+            assertAll("Idempotency",
+                    () -> assertTrue(firstFinish, "First finish should succeed"),
+                    () -> assertFalse(secondFinish, "Second finish should fail"),
+                    () -> assertFalse(thirdFinish, "Third finish should fail"),
+                    () -> assertEquals(0, scoreboard.getGameCount(), "Game count should be 0")
+            );
+        }
     }
 
-    @Test
-    @DisplayName("Should update game score successfully")
-    void testUpdateScore() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
+    @Nested
+    @DisplayName("summary generation")
+    class SummaryTests {
 
-        scoreboard.updateScore(game.getId(), 2, 1);
+        @Test
+        @DisplayName("should return empty list when no games exist")
+        void returnsEmptyListForNoGames() {
+            List<Game> summary = scoreboard.getSummary();
 
-        assertEquals(2, game.getHomeScore());
-        assertEquals(1, game.getAwayScore());
-        assertEquals(3, game.getTotalScore());
+            assertNotNull(summary);
+            assertTrue(summary.isEmpty());
+        }
+
+        @Test
+        @DisplayName("should order games by total score descending")
+        void ordersGamesByTotalScore() {
+            Game game1 = scoreboard.startGame("Mexico", "Canada");
+            Game game2 = scoreboard.startGame("Spain", "Brazil");
+            Game game3 = scoreboard.startGame("Germany", "France");
+            Game game4 = scoreboard.startGame("Uruguay", "Italy");
+            Game game5 = scoreboard.startGame("Argentina", "Australia");
+
+            scoreboard.updateScore(game1.getId(), 0, 5);   // Total: 5
+            scoreboard.updateScore(game2.getId(), 10, 2);  // Total: 12
+            scoreboard.updateScore(game3.getId(), 2, 2);   // Total: 4
+            scoreboard.updateScore(game4.getId(), 6, 6);   // Total: 12
+            scoreboard.updateScore(game5.getId(), 3, 1);   // Total: 4
+
+            List<Game> summary = scoreboard.getSummary();
+
+            assertEquals(5, summary.size());
+            // Verify descending order
+            for (int i = 0; i < summary.size() - 1; i++) {
+                assertTrue(summary.get(i).getTotalScore() >= summary.get(i + 1).getTotalScore(),
+                        "Scores should be in descending order");
+            }
+        }
+
+        @Test
+        @DisplayName("should order games with same score by start time (most recent first)")
+        void ordersGamesByStartTimeWhenScoresEqual() throws InterruptedException {
+            Game game1 = scoreboard.startGame("Germany", "France");
+            scoreboard.updateScore(game1.getId(), 2, 2);
+
+            Thread.sleep(50); // Ensure different start times
+
+            Game game2 = scoreboard.startGame("Argentina", "Australia");
+            scoreboard.updateScore(game2.getId(), 3, 1);
+
+            List<Game> summary = scoreboard.getSummary();
+
+            assertAll("Equal score ordering",
+                    () -> assertEquals(2, summary.size()),
+                    () -> assertEquals(4, summary.get(0).getTotalScore()),
+                    () -> assertEquals(4, summary.get(1).getTotalScore()),
+                    () -> assertEquals("Argentina", summary.get(0).getHomeTeam(),
+                            "Most recent game should be first"),
+                    () -> assertEquals("Germany", summary.get(1).getHomeTeam())
+            );
+        }
+
+        @Test
+        @DisplayName("should match requirements example")
+        void matchesRequirementExample() {
+            Game mexico = scoreboard.startGame("Mexico", "Canada");
+            Game spain = scoreboard.startGame("Spain", "Brazil");
+            Game germany = scoreboard.startGame("Germany", "France");
+            Game uruguay = scoreboard.startGame("Uruguay", "Italy");
+            Game argentina = scoreboard.startGame("Argentina", "Australia");
+
+            scoreboard.updateScore(mexico.getId(), 0, 5);
+            scoreboard.updateScore(spain.getId(), 10, 2);
+            scoreboard.updateScore(germany.getId(), 2, 2);
+            scoreboard.updateScore(uruguay.getId(), 6, 6);
+            scoreboard.updateScore(argentina.getId(), 3, 1);
+
+            List<Game> summary = scoreboard.getSummary();
+
+            assertAll("Requirements example",
+                    () -> assertEquals(5, summary.size()),
+                    () -> assertEquals("Uruguay", summary.get(0).getHomeTeam()),
+                    () -> assertEquals("Spain", summary.get(1).getHomeTeam()),
+                    () -> assertEquals("Mexico", summary.get(2).getHomeTeam()),
+                    () -> assertEquals("Argentina", summary.get(3).getHomeTeam()),
+                    () -> assertEquals("Germany", summary.get(4).getHomeTeam())
+            );
+        }
     }
 
-    @Test
-    @DisplayName("Should throw exception when updating with negative scores")
-    void testUpdateScoreNegative() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
+    @Nested
+    @DisplayName("thread safety")
+    class ConcurrencyTests {
 
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.updateScore(game.getId(), -1, 0));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.updateScore(game.getId(), 0, -1));
-        assertThrows(IllegalArgumentException.class,
-                () -> scoreboard.updateScore(game.getId(), -1, -1));
+        @Test
+        @DisplayName("should handle concurrent game creation safely")
+        void handlesConcurrentGameCreation() throws InterruptedException {
+            int numThreads = 10;
+            int gamesPerThread = 10;
+            CountDownLatch latch = new CountDownLatch(numThreads * gamesPerThread);
+            AtomicInteger successCount = new AtomicInteger(0);
+
+            try (ExecutorService executor = Executors.newFixedThreadPool(numThreads)) {
+                for (int i = 0; i < numThreads; i++) {
+                    int threadNum = i;
+                    executor.submit(() -> {
+                        for (int j = 0; j < gamesPerThread; j++) {
+                            try {
+                                scoreboard.startGame(
+                                        "Team" + threadNum + "A",
+                                        "Team" + threadNum + "B" + j
+                                );
+                                successCount.incrementAndGet();
+                            } finally {
+                                latch.countDown();
+                            }
+                        }
+                    });
+                }
+
+                assertTrue(latch.await(5, TimeUnit.SECONDS),
+                        "All concurrent operations should complete");
+                assertEquals(100, successCount.get(),
+                        "All 100 games should be created successfully");
+            }
+        }
+
+        @Test
+        @DisplayName("should handle concurrent score updates")
+        void handlesConcurrentScoreUpdates() throws InterruptedException {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+            int numThreads = 10;
+            CountDownLatch latch = new CountDownLatch(numThreads);
+
+            try (ExecutorService executor = Executors.newFixedThreadPool(numThreads)) {
+                for (int i = 0; i < numThreads; i++) {
+                    final int score = i;
+                    executor.submit(() -> {
+                        try {
+                            scoreboard.updateScore(game.getId(), score, score);
+                        } finally {
+                            latch.countDown();
+                        }
+                    });
+                }
+
+                assertTrue(latch.await(5, TimeUnit.SECONDS));
+
+                // Last write wins - score should be from one of the updates
+                int finalScore = game.getHomeScore();
+                assertTrue(finalScore >= 0 && finalScore < numThreads,
+                        "Final score should be from one of the concurrent updates");
+            }
+        }
     }
 
-    @Test
-    @DisplayName("Should finish game and remove from scoreboard")
-    void testFinishGame() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
-        Long gameId = game.getId();
+    @Nested
+    @DisplayName("integration scenarios")
+    class IntegrationTests {
 
-        assertEquals(1, scoreboard.getGameCount());
+        @Test
+        @DisplayName("should handle complete workflow")
+        void handlesCompleteWorkflow() {
+            // Start multiple games
+            Game game1 = scoreboard.startGame("Mexico", "Canada");
+            Game game2 = scoreboard.startGame("Spain", "Brazil");
+            Game game3 = scoreboard.startGame("Germany", "France");
 
-        boolean result = scoreboard.finishGame(gameId);
+            assertEquals(3, scoreboard.getGameCount());
 
-        assertTrue(result); // ← Dodane!
-        assertEquals(0, scoreboard.getGameCount());
-        assertNull(scoreboard.getGame(gameId));
-    }
+            // Update their scores
+            scoreboard.updateScore(game1.getId(), 0, 5);
+            scoreboard.updateScore(game2.getId(), 10, 2);
+            scoreboard.updateScore(game3.getId(), 2, 2);
 
-    @Test
-    @DisplayName("Should throw exception when updating non-existent game")
-    void testUpdateScoreNonExistentGame() {
-        assertThrows(GameNotFoundException.class,
-                () -> scoreboard.updateScore(999L, 1, 1));
-    }
+            // Verify summary ordering
+            List<Game> summary = scoreboard.getSummary();
+            assertEquals("Spain", summary.get(0).getHomeTeam());
+            assertEquals("Mexico", summary.get(1).getHomeTeam());
+            assertEquals("Germany", summary.get(2).getHomeTeam());
 
-    @Test
-    @DisplayName("Should return false when finishing non-existent game")
-    void testFinishNonExistentGame() {
-        boolean result = scoreboard.finishGame(999L);
+            // Finish one game
+            assertTrue(scoreboard.finishGame(game3.getId()));
+            assertEquals(2, scoreboard.getGameCount());
 
-        assertFalse(result);
-    }
-
-    @Test
-    @DisplayName("Should return true when finishing existing game")
-    void testFinishExistingGame() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
-
-        boolean result = scoreboard.finishGame(game.getId());
-
-        assertTrue(result);
-        assertEquals(0, scoreboard.getGameCount());
-    }
-
-    @Test
-    @DisplayName("Should be idempotent - finishing same game twice")
-    void testFinishGameIdempotent() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
-        Long gameId = game.getId();
-
-        // First call - should return true
-        boolean firstCall = scoreboard.finishGame(gameId);
-        assertTrue(firstCall);
-
-        // Second call - should return false (already finished)
-        boolean secondCall = scoreboard.finishGame(gameId);
-        assertFalse(secondCall);
-
-        // Game count should be 0
-        assertEquals(0, scoreboard.getGameCount());
-    }
-
-    @Test
-    @DisplayName("Should return summary ordered by total score descending")
-    void testGetSummaryOrderedByTotalScore() {
-        Game game1 = scoreboard.startGame("Mexico", "Canada");
-        Game game2 = scoreboard.startGame("Spain", "Brazil");
-        Game game3 = scoreboard.startGame("Germany", "France");
-        Game game4 = scoreboard.startGame("Uruguay", "Italy");
-        Game game5 = scoreboard.startGame("Argentina", "Australia");
-
-        scoreboard.updateScore(game1.getId(), 0, 5);
-        scoreboard.updateScore(game2.getId(), 10, 2);
-        scoreboard.updateScore(game3.getId(), 2, 2);
-        scoreboard.updateScore(game4.getId(), 6, 6);
-        scoreboard.updateScore(game5.getId(), 3, 1);
-
-        List<Game> summary = scoreboard.getSummary();
-
-        assertEquals(5, summary.size());
-
-        // Check if ordering by total score
-        assertTrue(summary.get(0).getTotalScore() >= summary.get(1).getTotalScore());
-        assertTrue(summary.get(1).getTotalScore() >= summary.get(2).getTotalScore());
-        assertTrue(summary.get(2).getTotalScore() >= summary.get(3).getTotalScore());
-        assertTrue(summary.get(3).getTotalScore() >= summary.get(4).getTotalScore());
-    }
-
-    @Test
-    @DisplayName("Should order games with same total score by start time (most recent first)")
-    void testGetSummaryOrderedByStartTime() throws InterruptedException {
-        Game game1 = scoreboard.startGame("Germany", "France");
-        scoreboard.updateScore(game1.getId(), 2, 2);
-
-        Thread.sleep(10); // Set different start times
-
-        Game game2 = scoreboard.startGame("Argentina", "Australia");
-        scoreboard.updateScore(game2.getId(), 3, 1);
-
-        List<Game> summary = scoreboard.getSummary();
-
-        assertEquals(2, summary.size());
-        assertEquals(4, summary.get(0).getTotalScore());
-        assertEquals(4, summary.get(1).getTotalScore());
-
-        // game2 started later, it should go first
-        assertEquals("Argentina", summary.get(0).getHomeTeam());
-        assertEquals("Germany", summary.get(1).getHomeTeam());
-    }
-
-    @Test
-    @DisplayName("Should return empty summary when no games exist")
-    void testGetSummaryEmpty() {
-        List<Game> summary = scoreboard.getSummary();
-
-        assertNotNull(summary);
-        assertTrue(summary.isEmpty());
-    }
-
-    @Test
-    @DisplayName("Should handle multiple games correctly")
-    void testMultipleGames() {
-        scoreboard.startGame("Mexico", "Canada");
-        scoreboard.startGame("Spain", "Brazil");
-        scoreboard.startGame("Germany", "France");
-
-        assertEquals(3, scoreboard.getGameCount());
-        assertEquals(3, scoreboard.getAllGames().size());
-    }
-
-    @Test
-    @DisplayName("Should get a game by its ID")
-    void testGetGame() {
-        Game game = scoreboard.startGame("Spain", "Brazil");
-
-        Game retrieved = scoreboard.getGame(game.getId());
-
-        assertNotNull(retrieved);
-        assertEquals(game.getId(), retrieved.getId());
-        assertEquals(game.getHomeTeam(), retrieved.getHomeTeam());
-        assertEquals(game.getAwayTeam(), retrieved.getAwayTeam());
-    }
-
-    @Test
-    @DisplayName("Integration test - complete flow")
-    void testFullScoreboardFlow() {
-        // Start multiple games
-        Game game1 = scoreboard.startGame("Mexico", "Canada");
-        Game game2 = scoreboard.startGame("Spain", "Brazil");
-        Game game3 = scoreboard.startGame("Germany", "France");
-
-        assertEquals(3, scoreboard.getGameCount());
-
-        // Update their scores
-        scoreboard.updateScore(game1.getId(), 0, 5);
-        scoreboard.updateScore(game2.getId(), 10, 2);
-        scoreboard.updateScore(game3.getId(), 2, 2);
-
-        // Verify if summary ordering works
-        List<Game> summary = scoreboard.getSummary();
-        assertEquals("Spain", summary.get(0).getHomeTeam());
-        assertEquals("Mexico", summary.get(1).getHomeTeam());
-        assertEquals("Germany", summary.get(2).getHomeTeam());
-
-        // Finish one chosen game
-        boolean wasFinished = scoreboard.finishGame(game3.getId());
-        assertTrue(wasFinished);
-        assertEquals(2, scoreboard.getGameCount());
-
-        // Verify if finished game is removed from summary
-        summary = scoreboard.getSummary();
-        assertEquals(2, summary.size());
-        assertFalse(summary.stream()
-                .anyMatch(g -> g.getHomeTeam().equals("Germany")));
+            // Verify finished game removed from summary
+            summary = scoreboard.getSummary();
+            assertEquals(2, summary.size());
+            assertFalse(summary.stream()
+                    .anyMatch(g -> g.getHomeTeam().equals("Germany")));
+        }
     }
 }
