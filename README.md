@@ -9,6 +9,8 @@ Simple in-memory scoreboard library for managing Football World Cup games.
 
 - Finish games idempotently
 
+- Team deduplication prevents same team in multiple simultaneous games
+
 - Generate summaries ordered by total score (desc) then start time (desc)
 
 - Thread-safe operations using concurrent data structures
@@ -131,11 +133,20 @@ public class Example {
    `GameNotFoundException` for operations on non-existent games
 
 
+8. **Team Deduplication**
+
+   **Decision**: Track active teams using `ConcurrentHashMap.newKeySet()` for thread-safe active team tracking to prevent same team in multiple concurrent games.
+
+   **Rationale**: Realistic real life example - a team cannot play in two games simultaneously.
+
+   **Trade-off**: Slightly more memory and complexity, but enforces important domain constraint.
+
+
 ### Architecture
 
 1. **Service Layer (Scoreboard)**: Manages collections, IDs, concurrency
 2. **Domain Layer (Game, Score)**: Business logic and validation
-3. **Exception Layer (GameNotFoundException)**: Domain-specific errors
+3. **Exception Layer (GameNotFoundException, TeamAlreadyPlayingException)**: Domain-specific errors
 
 ### License
 

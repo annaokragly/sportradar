@@ -251,6 +251,117 @@ class ScoreboardTest {
     }
 
     @Nested
+    @DisplayName("team deduplication")
+    class TeamDeduplicationTests {
+
+        @Test
+        @DisplayName("should prevent same team in multiple games")
+        void preventsSameTeamInMultipleGames() {
+            scoreboard.startGame("Spain", "Brazil");
+
+            // Try to start another game with Spain
+            TeamAlreadyPlayingException exception = assertThrows(
+                    TeamAlreadyPlayingException.class,
+                    () -> scoreboard.startGame("Spain", "Germany")
+            );
+
+            assertTrue(exception.getMessage().contains("Spain"));
+            assertEquals("Spain", exception.getTeamName());
+        }
+
+        @Test
+        @DisplayName("should prevent both teams if either is playing")
+        void preventsBothTeamsIfEitherIsPlaying() {
+            scoreboard.startGame("Spain", "Brazil");
+
+            assertAll("Both teams should be blocked",
+                    () -> assertThrows(TeamAlreadyPlayingException.class,
+                            () -> scoreboard.startGame("Spain", "Germany")),
+                    () -> assertThrows(TeamAlreadyPlayingException.class,
+                            () -> scoreboard.startGame("Germany", "Brazil"))
+            );
+        }
+
+        @Test
+        @DisplayName("should allow team to play again after game finishes")
+        void allowsTeamToPlayAgainAfterFinish() {
+            Game game = scoreboard.startGame("Spain", "Brazil");
+
+            scoreboard.finishGame(game.getId());
+
+            // Now Spain can play again
+            assertDoesNotThrow(() ->
+                    scoreboard.startGame("Spain", "Germany")
+            );
+        }
+
+        @Test
+        @DisplayName("should handle team names case-sensitively")
+        void handlesTeamNamesCaseSensitively() {
+            scoreboard.startGame("Spain", "Brazil");
+
+            // "spain" (lowercase) is different from "Spain"
+            assertDoesNotThrow(() ->
+                    scoreboard.startGame("spain", "Germany")
+            );
+        }
+
+        @Test
+        @DisplayName("should track active teams correctly")
+        void tracksActiveTeamsCorrectly() {
+            assertTrue(scoreboard.getActiveTeams().isEmpty());
+
+            Game game1 = scoreboard.startGame("Spain", "Brazil");
+            assertEquals(2, scoreboard.getActiveTeams().size());
+            assertTrue(scoreboard.isTeamPlaying("Spain"));
+            assertTrue(scoreboard.isTeamPlaying("Brazil"));
+
+            Game game2 = scoreboard.startGame("Germany", "France");
+            assertEquals(4, scoreboard.getActiveTeams().size());
+
+            scoreboard.finishGame(game1.getId());
+            assertEquals(2, scoreboard.getActiveTeams().size());
+            assertFalse(scoreboard.isTeamPlaying("Spain"));
+            assertFalse(scoreboard.isTeamPlaying("Brazil"));
+            assertTrue(scoreboard.isTeamPlaying("Germany"));
+        }
+
+        @Test
+        @DisplayName("should handle concurrent attempts to use same team")
+        void handlesConcurrentAttemptsToUseSameTeam() throws InterruptedException {
+            int numThreads = 10;
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicInteger failureCount = new AtomicInteger(0);
+            CountDownLatch latch = new CountDownLatch(numThreads);
+
+            try (ExecutorService executor = Executors.newFixedThreadPool(numThreads)) {
+                for (int i = 0; i < numThreads; i++) {
+                    final int threadNum = i;
+                    executor.submit(() -> {
+                        try {
+                            // All threads try to start game with "Spain"
+                            scoreboard.startGame("Spain", "Country" + threadNum);
+                            successCount.incrementAndGet();
+                        } catch (TeamAlreadyPlayingException e) {
+                            failureCount.incrementAndGet();
+                        } finally {
+                            latch.countDown();
+                        }
+                    });
+                }
+
+                assertTrue(latch.await(5, TimeUnit.SECONDS));
+            }
+
+            // Only 1 should succeed, rest should fail
+            assertEquals(1, successCount.get(),
+                    "Only one thread should successfully start game with Spain");
+            assertEquals(9, failureCount.get(),
+                    "Nine threads should fail due to team already playing");
+        }
+    }
+
+    @Nested
     @DisplayName("thread safety")
     class ConcurrencyTests {
 
@@ -269,7 +380,7 @@ class ScoreboardTest {
                         for (int j = 0; j < gamesPerThread; j++) {
                             try {
                                 scoreboard.startGame(
-                                        "Team" + threadNum + "A",
+                                        "Team" + threadNum + "A" + j,
                                         "Team" + threadNum + "B" + j
                                 );
                                 successCount.incrementAndGet();

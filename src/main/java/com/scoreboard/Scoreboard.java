@@ -15,17 +15,36 @@ import java.util.Optional;
 public class Scoreboard {
     private final Map<Long, Game> games;
     private final AtomicLong idGenerator = new AtomicLong(1);
+    private final Set<String> activeTeams;
 
     public Scoreboard() {
         this.games = new ConcurrentHashMap<>();
+        this.activeTeams = ConcurrentHashMap.newKeySet();
     }
 
     public Game startGame(String homeTeam, String awayTeam) {
         Long gameId = idGenerator.getAndIncrement();
         Game game = new Game(gameId, homeTeam, awayTeam);
 
+        String normalizedHome = game.getHomeTeam();
+        String normalizedAway = game.getAwayTeam();
+
+        if (activeTeams.contains(normalizedHome)) {
+            throw new TeamAlreadyPlayingException(normalizedHome);
+        }
+
+        if (activeTeams.contains(normalizedAway)) {
+            throw new TeamAlreadyPlayingException(normalizedAway);
+        }
+
+        activeTeams.add(normalizedHome);
+        activeTeams.add(normalizedAway);
+
         Game existing = games.putIfAbsent(gameId, game);
         if (existing != null) {
+
+            activeTeams.remove(normalizedHome);
+            activeTeams.remove(normalizedAway);
             throw new IllegalStateException("Game ID collision detected: " + gameId);
         }
 
@@ -34,7 +53,17 @@ public class Scoreboard {
 
     public boolean finishGame(Long gameId) {
         Objects.requireNonNull(gameId, "Game ID cannot be null");
-        return games.remove(gameId) != null;
+
+        Game game = games.remove(gameId);
+
+        if (game != null) {
+            activeTeams.remove(game.getHomeTeam());
+            activeTeams.remove(game.getAwayTeam());
+
+            return true;
+        }
+
+        return false;
     }
 
     public void updateScore(Long gameId, int homeScore, int awayScore) {
@@ -59,6 +88,15 @@ public class Scoreboard {
     public Optional<Game> findGame(Long gameId) {
         Objects.requireNonNull(gameId, "Game ID cannot be null");
         return Optional.ofNullable(games.get(gameId));
+    }
+
+    public boolean isTeamPlaying(String teamName) {
+        Objects.requireNonNull(teamName, "Team name cannot be null");
+        return activeTeams.contains(teamName);
+    }
+
+    public Set<String> getActiveTeams() {
+        return Set.copyOf(activeTeams);
     }
 
     public List<Game> getAllGames() {
